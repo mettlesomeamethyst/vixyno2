@@ -1,0 +1,8 @@
+{
+  "name": "vixytostremio",
+  "version": "1.0.0",
+  "description": "Stremio addon that opens titles on an external site via TMDB id",
+  "main": "index.js",
+  "scripts": { "start": "node index.js" },
+  "engines": { "node": ">=18" }
+}
