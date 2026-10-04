@@ -139,12 +139,40 @@ async function fetchPage(url) {
       redirect: 'follow',
       signal: AbortSignal.timeout(8000),
     });
-    if (!res.ok) return null;
-    return { html: await res.text(), base: res.url };
+    if (!res.ok) {
+      console.error(`Page ${url} answered HTTP ${res.status}`);
+      return { error: `HTTP ${res.status}`, status: res.status };
+    }
+    return { html: await res.text(), base: res.url, status: res.status };
   } catch (err) {
     console.error(`Could not fetch ${url}: ${err.message}`);
-    return null;
+    return { error: err.message };
   }
+}
+
+// Shows what the addon sees on a page, to find out why no streams were detected.
+function diagnose(page, url) {
+  if (!page || page.error) return { url, fetched: false, error: page ? page.error : 'no response' };
+  const html = page.html;
+  const count = (re) => (html.match(re) || []).length;
+  const found = extractMedia(html, page.base);
+  return {
+    url,
+    fetched: true,
+    finalUrl: page.base,
+    htmlLength: html.length,
+    counts: {
+      video: count(/<video\b/gi),
+      source: count(/<source\b/gi),
+      track: count(/<track\b/gi),
+      iframe: count(/<iframe\b/gi),
+      script: count(/<script\b/gi),
+    },
+    detected: found,
+    tagSamples: (html.match(/<(?:video|source|track|iframe)\b[^>]*>/gi) || []).slice(0, 8),
+    mediaUrlsInSource: (html.match(/https?:\/\/[^\s"'<>\\]+\.(?:mp4|m3u8|webm|mkv|vtt|srt)[^\s"'<>\\]*/gi) || []).slice(0, 8),
+    htmlStart: html.slice(0, 300),
+  };
 }
 
 function send(res, status, body) {
@@ -163,6 +191,19 @@ const server = http
 
     if (path === '/manifest.json') return send(res, 200, manifest);
 
+    // Debug helper: /debug/movie/tt0133093  or  /debug/series/tt0413573:2:5
+    const d = path.match(/^\/debug\/(movie|series)\/(.+)$/);
+    if (d) {
+      try {
+        const p = await buildLink(d[1], d[2]);
+        if (!p) return send(res, 200, { error: 'could not build a link for this id' });
+        const url = `https://${DOMAIN}${p}`;
+        return send(res, 200, diagnose(await fetchPage(url), url));
+      } catch (err) {
+        return send(res, 200, { error: err.message });
+      }
+    }
+
     const m = path.match(/^\/stream\/(movie|series)\/(.+)\.json$/);
     if (m) {
       try {
@@ -171,8 +212,9 @@ const server = http
         let native = [];
         if (path) {
           const page = await fetchPage(plain);
-          if (page) {
+          if (page && page.html) {
             const { videos, subtitles } = extractMedia(page.html, page.base);
+            console.log(`${plain}: ${videos.length} video source(s), ${subtitles.length} subtitle(s)`);
             native = videos.map((v, i) => ({
               name: 'Review',
               title: v.label || `Version ${i + 1}`,
